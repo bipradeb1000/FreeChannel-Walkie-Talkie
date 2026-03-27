@@ -1,0 +1,5 @@
+{
+  "name": "FreeChannel Walkie Talkie",
+  "description": "A real-time push-to-talk walkie talkie application with a shared global channel and Gemini-powered voice assistance.",
+  "requestFramePermissions": ["microphone"]
+}
