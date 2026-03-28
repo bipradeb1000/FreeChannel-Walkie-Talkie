@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Mic, MicOff, Radio, Volume2, Users, Settings, MessageSquare, Info, Activity, SignalHigh } from 'lucide-react';
+import { Mic, MicOff, Radio, Volume2, Users, Settings, MessageSquare, Info, Activity, SignalHigh, Globe, User, Sliders, ChevronDown, ChevronUp, Search, Sparkles, Loader2, Map as MapIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { GoogleGenAI } from "@google/genai";
+import Markdown from 'react-markdown';
 
 
 const SOCKET_URL = window.location.origin;
@@ -16,6 +18,45 @@ const COMMON_FREQUENCIES = [
 
 const AVAILABLE_CHANNELS = ['Global Net', 'Emergency', 'Public', 'Tactical', 'Event A', 'Event B'];
 
+interface CollapsibleSectionProps {
+  title: string;
+  children: React.ReactNode;
+  isOpen: boolean;
+  onToggle: () => void;
+  icon?: React.ReactNode;
+}
+
+const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({ title, children, isOpen, onToggle, icon }) => {
+  return (
+    <div className="bg-[#151619] rounded-2xl border-2 border-[#2A2B2F] shadow-xl overflow-hidden">
+      <button
+        onClick={onToggle}
+        className="w-full p-4 flex items-center justify-between hover:bg-[#1A1B1E] transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {icon && <div className="text-[#8E9299]">{icon}</div>}
+          <h3 className="text-[#8E9299] text-[10px] uppercase tracking-widest font-bold">{title}</h3>
+        </div>
+        {isOpen ? <ChevronUp className="w-3 h-3 text-[#8E9299]" /> : <ChevronDown className="w-3 h-3 text-[#8E9299]" />}
+      </button>
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
+          >
+            <div className="p-6 pt-0 border-t border-[#2A2B2F]/50">
+              {children}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 export default function WalkieTalkie() {
   const [isConnected, setIsConnected] = useState(false);
   const [isTalking, setIsTalking] = useState(false);
@@ -27,6 +68,7 @@ export default function WalkieTalkie() {
   const [globalDirectory, setGlobalDirectory] = useState<{username: string, room: string}[]>([]);
   
   const [isGatewayMode, setIsGatewayMode] = useState(false);
+  const [isHighGain, setIsHighGain] = useState(false);
   const [channel, setChannel] = useState('Global Net');
   const [frequency, setFrequency] = useState('446.00625');
   const [tone, setTone] = useState('67.0'); // CTCSS Tone
@@ -39,6 +81,91 @@ export default function WalkieTalkie() {
   const [targetOperatorId, setTargetOperatorId] = useState('');
   const [isSendingSOS, setIsSendingSOS] = useState(false);
   const [activeSOSFrom, setActiveSOSFrom] = useState<string | null>(null);
+  const [activeSettingsTab, setActiveSettingsTab] = useState<'profile' | 'audio' | 'network' | 'search' | 'map'>('profile');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResponse, setSearchResponse] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
+    operatorId: true,
+    activeOps: true,
+    levels: true,
+    gateway: true,
+    netSelector: true,
+    directory: true,
+    radioSettings: true,
+    aiSearch: true,
+    audioProcessing: true
+  });
+  const [smartFeed, setSmartFeed] = useState<string>('Initializing Smart Feed...');
+  const [isSmartFeedLoading, setIsSmartFeedLoading] = useState(false);
+
+  const toggleSection = (section: string) => {
+    setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  const fetchSmartFeed = async () => {
+    setIsSmartFeedLoading(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      
+      // Try to get location
+      let location = "Global";
+      try {
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
+        });
+        location = `${pos.coords.latitude}, ${pos.coords.longitude}`;
+      } catch (e) {
+        console.log("Location access denied or timed out, using Global.");
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Provide a very short (max 15 words) summary of the current weather and top news for ${location}. Format as a single line for a scrolling ticker.`,
+        config: {
+          tools: [{ googleSearch: {} }],
+        },
+      });
+      
+      setSmartFeed(response.text || 'No feed data available.');
+    } catch (error) {
+      console.error('Smart Feed error:', error);
+      setSmartFeed('Internet connection active. Standby for updates.');
+    } finally {
+      setIsSmartFeedLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSmartFeed();
+    const interval = setInterval(fetchSmartFeed, 300000); // Update every 5 minutes
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleInternetSearch = async () => {
+    if (!searchQuery.trim()) return;
+    
+    setIsSearching(true);
+    setSearchResponse('');
+    
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: searchQuery,
+        config: {
+          tools: [{ googleSearch: {} }],
+        },
+      });
+      
+      setSearchResponse(response.text || 'No information found.');
+    } catch (error) {
+      console.error('Search error:', error);
+      setSearchResponse('Error connecting to the internet services. Please try again.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
   
   const socketRef = useRef<Socket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -252,7 +379,7 @@ export default function WalkieTalkie() {
 
         // Use ref to get current volume
         const currentVol = volumeRef.current;
-        const effectiveVolume = currentVol < 0.1 ? 0 : currentVol;
+        const effectiveVolume = (currentVol < 0.1 ? 0 : currentVol) * (isHighGain ? 2.0 : 1.0);
 
         try {
           // Attempt decoding via AudioContext (preferred for low latency)
@@ -460,7 +587,19 @@ export default function WalkieTalkie() {
           <div className="bg-[#1A1B1E] rounded-xl p-4 border border-[#2A2B2F] shadow-inner relative overflow-hidden min-h-[200px] flex flex-col">
             <div className="absolute top-0 left-0 w-full h-full opacity-5 pointer-events-none bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-white via-transparent to-transparent" />
             
-            <div className="flex justify-between items-start mb-2">
+            {/* Smart Feed Ticker */}
+            <div className="absolute top-0 left-0 w-full bg-blue-500/10 border-b border-blue-500/20 py-1 overflow-hidden z-10">
+              <motion.div
+                animate={{ x: [-400, 400] }}
+                transition={{ duration: 20, repeat: Infinity, ease: 'linear' }}
+                className="whitespace-nowrap text-[8px] font-bold text-blue-400 uppercase tracking-widest flex items-center gap-2"
+              >
+                <Globe className="w-2 h-2" />
+                {smartFeed}
+              </motion.div>
+            </div>
+
+            <div className="flex justify-between items-start mb-2 mt-4">
               <div className="flex flex-col">
                 <div className="flex items-center gap-2 mb-1">
                   <h2 className="text-[#8E9299] text-[10px] uppercase tracking-widest">Net:</h2>
@@ -479,6 +618,16 @@ export default function WalkieTalkie() {
                 )}
               </div>
               <div className="flex flex-col items-end gap-1">
+                <button 
+                  onClick={() => {
+                    setActiveSettingsTab('search');
+                    setShowSettings(true);
+                  }}
+                  className="p-1 bg-orange-500/10 border border-orange-500/20 rounded-md hover:bg-orange-500/20 transition-colors group"
+                  title="Smart Assistant"
+                >
+                  <Sparkles className="w-3 h-3 text-orange-500 group-hover:scale-110 transition-transform" />
+                </button>
                 <SignalHigh className={`w-5 h-5 ${isConnected ? 'text-green-500' : 'text-[#8E9299]'}`} />
                 <Activity className={`w-4 h-4 ${isTalking || activeSpeakers.size > 0 ? 'text-red-500 animate-pulse' : 'text-[#8E9299]'}`} />
               </div>
@@ -868,125 +1017,397 @@ export default function WalkieTalkie() {
               </button>
             </div>
 
-            <div className="bg-[#151619] p-6 rounded-2xl border-2 border-[#2A2B2F] shadow-xl">
-              <h3 className="text-[#8E9299] text-[10px] uppercase tracking-widest mb-4 font-bold">Operator ID</h3>
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center border border-green-500/20">
-                  <Users className="w-5 h-5 text-green-500" />
-                </div>
-                <div className="flex-1">
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    className="w-full bg-transparent text-white text-sm font-bold focus:outline-none border-b border-transparent focus:border-green-500 transition-colors"
-                  />
-                  <p className="text-[#8E9299] text-[9px] uppercase mt-1">Base Operator</p>
-                </div>
-              </div>
+            {/* Tab Navigation */}
+            <div className="flex gap-1 bg-[#1A1B1E] p-1 rounded-xl border border-[#2A2B2F] mb-2">
+              <button
+                onClick={() => setActiveSettingsTab('profile')}
+                className={`flex-1 flex flex-col items-center py-2 rounded-lg transition-all ${
+                  activeSettingsTab === 'profile' ? 'bg-green-600 text-white' : 'text-[#8E9299] hover:text-white'
+                }`}
+              >
+                <User className="w-4 h-4 mb-1" />
+                <span className="text-[8px] font-black uppercase">Operator</span>
+              </button>
+              <button
+                onClick={() => setActiveSettingsTab('audio')}
+                className={`flex-1 flex flex-col items-center py-2 rounded-lg transition-all ${
+                  activeSettingsTab === 'audio' ? 'bg-blue-600 text-white' : 'text-[#8E9299] hover:text-white'
+                }`}
+              >
+                <Sliders className="w-4 h-4 mb-1" />
+                <span className="text-[8px] font-black uppercase">Audio</span>
+              </button>
+              <button
+                onClick={() => setActiveSettingsTab('network')}
+                className={`flex-1 flex flex-col items-center py-2 rounded-lg transition-all ${
+                  activeSettingsTab === 'network' ? 'bg-purple-600 text-white' : 'text-[#8E9299] hover:text-white'
+                }`}
+              >
+                <Globe className="w-4 h-4 mb-1" />
+                <span className="text-[8px] font-black uppercase">Network</span>
+              </button>
+              <button
+                onClick={() => setActiveSettingsTab('search')}
+                className={`flex-1 flex flex-col items-center py-2 rounded-lg transition-all ${
+                  activeSettingsTab === 'search' ? 'bg-orange-600 text-white' : 'text-[#8E9299] hover:text-white'
+                }`}
+              >
+                <Search className="w-4 h-4 mb-1" />
+                <span className="text-[8px] font-black uppercase">Search</span>
+              </button>
+              <button
+                onClick={() => setActiveSettingsTab('map')}
+                className={`flex-1 flex flex-col items-center py-2 rounded-lg transition-all ${
+                  activeSettingsTab === 'map' ? 'bg-red-600 text-white' : 'text-[#8E9299] hover:text-white'
+                }`}
+              >
+                <MapIcon className="w-4 h-4 mb-1" />
+                <span className="text-[8px] font-black uppercase">Map</span>
+              </button>
             </div>
 
-            <div className="bg-[#151619] p-6 rounded-2xl border-2 border-[#2A2B2F] shadow-xl">
-              <h3 className="text-[#8E9299] text-[10px] uppercase tracking-widest mb-4 font-bold">Active Operators</h3>
-              <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
-                {userList.length > 0 ? (
-                  userList.map((user, idx) => (
-                    <div key={idx} className="flex items-center gap-2 text-[10px] text-green-400 font-bold">
-                      <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                      {user} {user === username && <span className="text-[#8E9299] font-normal">(YOU)</span>}
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-[#8E9299] text-[9px] italic">Scanning for signals...</p>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-[#151619] p-6 rounded-2xl border-2 border-[#2A2B2F] shadow-xl">
-              <h3 className="text-[#8E9299] text-[10px] uppercase tracking-widest mb-4 font-bold">Global Directory</h3>
-              <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
-                {globalDirectory.length > 0 ? (
-                  globalDirectory.map((entry, idx) => (
-                    <div key={idx} className="flex flex-col gap-0.5 border-b border-[#2A2B2F] pb-2 last:border-0">
-                      <div className="flex items-center gap-2 text-[10px] text-blue-400 font-bold">
-                        <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                        {entry.username}
-                      </div>
-                      <div className="text-[8px] text-[#8E9299] uppercase pl-3.5">
-                        {entry.room}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-[#8E9299] text-[9px] italic">No other signals found...</p>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-[#151619] p-6 rounded-2xl border-2 border-[#2A2B2F] shadow-xl">
-              <h3 className="text-[#8E9299] text-[10px] uppercase tracking-widest mb-4 font-bold">Net Selector</h3>
-              <div className="grid grid-cols-1 gap-2">
-                {AVAILABLE_CHANNELS.map((ch) => (
-                  <button
-                    key={ch}
-                    onClick={() => {
-                      setChannel(ch);
-                      if (!isLargeScreen) setShowSettings(false);
-                    }}
-                    className={`w-full py-2 px-4 rounded-lg text-[10px] font-bold transition-all border text-left flex items-center justify-between ${
-                      channel === ch 
-                        ? 'bg-blue-500/20 border-blue-500 text-blue-400' 
-                        : 'bg-[#1A1B1E] border-[#2A2B2F] text-[#8E9299] hover:border-[#3A3B3F]'
-                    }`}
-                  >
-                    {ch}
-                    {channel === ch && <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-[#151619] p-6 rounded-2xl border-2 border-[#2A2B2F] shadow-xl">
-              <h3 className="text-[#8E9299] text-[10px] uppercase tracking-widest mb-4 font-bold">Gateway Config</h3>
-              <div className="flex items-center justify-between p-3 bg-[#1A1B1E] rounded-xl border border-[#2A2B2F]">
-                <div className="flex items-center gap-2">
-                  <Activity className={`w-4 h-4 ${isGatewayMode ? 'text-green-500' : 'text-[#8E9299]'}`} />
-                  <span className="text-white text-[10px] font-bold uppercase">Gateway Mode</span>
-                </div>
-                <button 
-                  onClick={() => setIsGatewayMode(!isGatewayMode)}
-                  className={`w-10 h-5 rounded-full transition-colors relative ${isGatewayMode ? 'bg-green-600' : 'bg-[#2A2B2F]'}`}
+            {/* Tab Content */}
+            <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-4">
+              {activeSettingsTab === 'map' && (
+                <motion.div
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="space-y-4"
                 >
-                  <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${isGatewayMode ? 'right-1' : 'left-1'}`} />
-                </button>
-              </div>
-              <p className="text-[#8E9299] text-[8px] mt-3 leading-relaxed">
-                Enable for RoIP hardware. Disables browser echo cancellation for raw radio signal pass-through.
-              </p>
-            </div>
+                  <div className="bg-[#1A1B1E] rounded-2xl border-2 border-[#2A2B2F] p-4 h-80 relative overflow-hidden">
+                    <div className="absolute inset-0 opacity-20 bg-[url('https://picsum.photos/seed/map/800/800')] bg-cover bg-center grayscale" />
+                    <div className="relative z-10 h-full flex flex-col">
+                      <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-white text-[10px] uppercase font-black tracking-widest">Global Operator Map</h3>
+                        <div className="flex items-center gap-1">
+                          <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                          <span className="text-red-500 text-[8px] font-bold">LIVE</span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex-1 relative">
+                        {/* Simulated Map Markers */}
+                        {globalDirectory.map((entry, idx) => (
+                          <motion.div
+                            key={idx}
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            className="absolute"
+                            style={{
+                              left: `${(idx * 37) % 80 + 10}%`,
+                              top: `${(idx * 23) % 80 + 10}%`
+                            }}
+                          >
+                            <div className="relative group">
+                              <div className="w-3 h-3 bg-blue-500 rounded-full border-2 border-white shadow-lg cursor-pointer" />
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-black/80 text-white text-[6px] px-1 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                                {entry.username}
+                              </div>
+                            </div>
+                          </motion.div>
+                        ))}
+                        
+                        {/* Current User Marker */}
+                        <motion.div
+                          className="absolute"
+                          style={{ left: '50%', top: '50%' }}
+                        >
+                          <div className="relative">
+                            <div className="w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow-lg animate-bounce" />
+                            <div className="absolute -inset-2 bg-green-500/20 rounded-full animate-ping" />
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-green-600 text-white text-[6px] px-1 py-0.5 rounded font-bold whitespace-nowrap">
+                              YOU
+                            </div>
+                          </div>
+                        </motion.div>
+                      </div>
+                      
+                      <p className="text-[#8E9299] text-[7px] uppercase text-center mt-2">
+                        Visualizing active RoIP nodes across the network.
+                      </p>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+              {activeSettingsTab === 'search' && (
+                <motion.div
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="space-y-4"
+                >
+                  <CollapsibleSection
+                    title="Internet Search"
+                    isOpen={collapsedSections.aiSearch}
+                    onToggle={() => toggleSection('aiSearch')}
+                    icon={<Sparkles className="w-3 h-3" />}
+                  >
+                    <div className="space-y-4">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Ask anything..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleInternetSearch()}
+                          className="w-full bg-[#1A1B1E] border border-[#2A2B2F] rounded-lg p-3 pr-10 text-white text-xs focus:border-orange-500 outline-none transition-all"
+                        />
+                        <button 
+                          onClick={handleInternetSearch}
+                          disabled={isSearching}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-[#8E9299] hover:text-orange-500 disabled:opacity-50"
+                        >
+                          {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      
+                      {searchResponse && (
+                        <div className="bg-[#1A1B1E] border border-[#2A2B2F] rounded-xl p-4 text-[10px] text-[#E4E3E0] leading-relaxed max-h-80 overflow-y-auto custom-scrollbar">
+                          <div className="markdown-body">
+                            <Markdown>{searchResponse}</Markdown>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {!searchResponse && !isSearching && (
+                        <p className="text-[#8E9299] text-[8px] uppercase text-center py-4">
+                          Use the internet to find frequencies, weather, or technical data.
+                        </p>
+                      )}
+                    </div>
+                  </CollapsibleSection>
+                </motion.div>
+              )}
+              {activeSettingsTab === 'profile' && (
+                <motion.div
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="space-y-4"
+                >
+                  <CollapsibleSection
+                    title="Operator ID"
+                    isOpen={collapsedSections.operatorId}
+                    onToggle={() => toggleSection('operatorId')}
+                    icon={<User className="w-3 h-3" />}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center border border-green-500/20">
+                        <Users className="w-5 h-5 text-green-500" />
+                      </div>
+                      <div className="flex-1">
+                        <input
+                          type="text"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          className="w-full bg-transparent text-white text-sm font-bold focus:outline-none border-b border-transparent focus:border-green-500 transition-colors"
+                        />
+                        <p className="text-[#8E9299] text-[9px] uppercase mt-1">Base Operator</p>
+                      </div>
+                    </div>
+                  </CollapsibleSection>
 
-            <div className="bg-[#151619] p-6 rounded-2xl border-2 border-[#2A2B2F] shadow-xl mb-6 lg:mb-0">
-              <h3 className="text-[#8E9299] text-[10px] uppercase tracking-widest mb-4 font-bold">Radio Settings</h3>
-              <div className="space-y-4">
-                <div>
-                  <label className="text-[#8E9299] text-[9px] uppercase block mb-2">Manual Frequency</label>
-                  <input
-                    type="text"
-                    value={frequency}
-                    onChange={(e) => setFrequency(e.target.value)}
-                    className="w-full bg-[#1A1B1E] border border-[#2A2B2F] rounded-lg p-2 text-white text-xs focus:border-green-500 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-[#8E9299] text-[9px] uppercase block mb-2">CTCSS Tone (Hz)</label>
-                  <input
-                    type="text"
-                    value={tone}
-                    onChange={(e) => setTone(e.target.value)}
-                    className="w-full bg-[#1A1B1E] border border-[#2A2B2F] rounded-lg p-2 text-white text-xs focus:border-green-500 outline-none"
-                  />
-                </div>
-              </div>
+                  <CollapsibleSection
+                    title="Active Operators"
+                    isOpen={collapsedSections.activeOps}
+                    onToggle={() => toggleSection('activeOps')}
+                    icon={<Activity className="w-3 h-3" />}
+                  >
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+                      {userList.length > 0 ? (
+                        userList.map((user, idx) => (
+                          <div key={idx} className="flex items-center gap-2 text-[10px] text-green-400 font-bold">
+                            <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                            {user} {user === username && <span className="text-[#8E9299] font-normal">(YOU)</span>}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-[#8E9299] text-[9px] italic">Scanning for signals...</p>
+                      )}
+                    </div>
+                  </CollapsibleSection>
+                </motion.div>
+              )}
+
+              {activeSettingsTab === 'audio' && (
+                <motion.div
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="space-y-4"
+                >
+                  <CollapsibleSection
+                    title="Levels"
+                    isOpen={collapsedSections.levels}
+                    onToggle={() => toggleSection('levels')}
+                    icon={<Sliders className="w-3 h-3" />}
+                  >
+                    <div className="space-y-6">
+                      <div className="flex flex-col gap-2">
+                        <div className="flex justify-between text-[9px] text-[#8E9299] uppercase font-bold">
+                          <span>Volume</span>
+                          <span>{Math.round(volume * 100)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.1"
+                          value={volume}
+                          onChange={(e) => setVolume(parseFloat(e.target.value))}
+                          className="w-full h-2 bg-[#2A2B2F] rounded-full appearance-none cursor-pointer accent-green-500"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex justify-between text-[9px] text-[#8E9299] uppercase font-bold">
+                          <span>Squelch</span>
+                          <span>{Math.round(squelch * 100)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.1"
+                          value={squelch}
+                          onChange={(e) => setSquelch(parseFloat(e.target.value))}
+                          className="w-full h-2 bg-[#2A2B2F] rounded-full appearance-none cursor-pointer accent-blue-500"
+                        />
+                      </div>
+                    </div>
+                  </CollapsibleSection>
+
+                  <CollapsibleSection
+                    title="Gateway Config"
+                    isOpen={collapsedSections.gateway}
+                    onToggle={() => toggleSection('gateway')}
+                    icon={<Radio className="w-3 h-3" />}
+                  >
+                    <div className="flex items-center justify-between p-3 bg-[#1A1B1E] rounded-xl border border-[#2A2B2F]">
+                      <div className="flex items-center gap-2">
+                        <Activity className={`w-4 h-4 ${isGatewayMode ? 'text-green-500' : 'text-[#8E9299]'}`} />
+                        <span className="text-white text-[10px] font-bold uppercase">Gateway Mode</span>
+                      </div>
+                      <button 
+                        onClick={() => setIsGatewayMode(!isGatewayMode)}
+                        className={`w-10 h-5 rounded-full transition-colors relative ${isGatewayMode ? 'bg-green-600' : 'bg-[#2A2B2F]'}`}
+                      >
+                        <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${isGatewayMode ? 'right-1' : 'left-1'}`} />
+                      </button>
+                    </div>
+                    <p className="text-[#8E9299] text-[8px] mt-3 leading-relaxed">
+                      Enable for RoIP hardware. Disables browser echo cancellation for raw radio signal pass-through.
+                    </p>
+                  </CollapsibleSection>
+
+                  <CollapsibleSection
+                    title="Audio Processing"
+                    isOpen={collapsedSections.audioProcessing}
+                    onToggle={() => toggleSection('audioProcessing')}
+                    icon={<Volume2 className="w-3 h-3" />}
+                  >
+                    <div className="flex items-center justify-between p-3 bg-[#1A1B1E] rounded-xl border border-[#2A2B2F]">
+                      <div className="flex items-center gap-2">
+                        <Activity className={`w-4 h-4 ${isHighGain ? 'text-orange-500' : 'text-[#8E9299]'}`} />
+                        <span className="text-white text-[10px] font-bold uppercase">High Gain Mode</span>
+                      </div>
+                      <button 
+                        onClick={() => setIsHighGain(!isHighGain)}
+                        className={`w-10 h-5 rounded-full transition-colors relative ${isHighGain ? 'bg-orange-600' : 'bg-[#2A2B2F]'}`}
+                      >
+                        <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${isHighGain ? 'right-1' : 'left-1'}`} />
+                      </button>
+                    </div>
+                    <p className="text-[#8E9299] text-[8px] mt-3 leading-relaxed">
+                      Boosts incoming audio signals. Use with caution to avoid distortion or speaker damage.
+                    </p>
+                  </CollapsibleSection>
+                </motion.div>
+              )}
+
+              {activeSettingsTab === 'network' && (
+                <motion.div
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="space-y-4"
+                >
+                  <CollapsibleSection
+                    title="Net Selector"
+                    isOpen={collapsedSections.netSelector}
+                    onToggle={() => toggleSection('netSelector')}
+                    icon={<Globe className="w-3 h-3" />}
+                  >
+                    <div className="grid grid-cols-1 gap-2">
+                      {AVAILABLE_CHANNELS.map((ch) => (
+                        <button
+                          key={ch}
+                          onClick={() => {
+                            setChannel(ch);
+                            if (!isLargeScreen) setShowSettings(false);
+                          }}
+                          className={`w-full py-2 px-4 rounded-lg text-[10px] font-bold transition-all border text-left flex items-center justify-between ${
+                            channel === ch 
+                              ? 'bg-blue-500/20 border-blue-500 text-blue-400' 
+                              : 'bg-[#1A1B1E] border-[#2A2B2F] text-[#8E9299] hover:border-[#3A3B3F]'
+                          }`}
+                        >
+                          {ch}
+                          {channel === ch && <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />}
+                        </button>
+                      ))}
+                    </div>
+                  </CollapsibleSection>
+
+                  <CollapsibleSection
+                    title="Global Directory"
+                    isOpen={collapsedSections.directory}
+                    onToggle={() => toggleSection('directory')}
+                    icon={<Users className="w-3 h-3" />}
+                  >
+                    <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                      {globalDirectory.length > 0 ? (
+                        globalDirectory.map((entry, idx) => (
+                          <div key={idx} className="flex flex-col gap-0.5 border-b border-[#2A2B2F] pb-2 last:border-0">
+                            <div className="flex items-center gap-2 text-[10px] text-blue-400 font-bold">
+                              <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                              {entry.username}
+                            </div>
+                            <div className="text-[8px] text-[#8E9299] uppercase pl-3.5">
+                              {entry.room}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-[#8E9299] text-[9px] italic">No other signals found...</p>
+                      )}
+                    </div>
+                  </CollapsibleSection>
+
+                  <CollapsibleSection
+                    title="Radio Settings"
+                    isOpen={collapsedSections.radioSettings}
+                    onToggle={() => toggleSection('radioSettings')}
+                    icon={<Radio className="w-3 h-3" />}
+                  >
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-[#8E9299] text-[9px] uppercase block mb-2">Manual Frequency</label>
+                        <input
+                          type="text"
+                          value={frequency}
+                          onChange={(e) => setFrequency(e.target.value)}
+                          className="w-full bg-[#1A1B1E] border border-[#2A2B2F] rounded-lg p-2 text-white text-xs focus:border-green-500 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[#8E9299] text-[9px] uppercase block mb-2">CTCSS Tone (Hz)</label>
+                        <input
+                          type="text"
+                          value={tone}
+                          onChange={(e) => setTone(e.target.value)}
+                          className="w-full bg-[#1A1B1E] border border-[#2A2B2F] rounded-lg p-2 text-white text-xs focus:border-green-500 outline-none"
+                        />
+                      </div>
+                    </div>
+                  </CollapsibleSection>
+                </motion.div>
+              )}
             </div>
           </motion.div>
         )}
