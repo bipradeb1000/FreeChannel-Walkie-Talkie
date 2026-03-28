@@ -98,6 +98,25 @@ export default function WalkieTalkie() {
   });
   const [smartFeed, setSmartFeed] = useState<string>('Initializing Smart Feed...');
   const [isSmartFeedLoading, setIsSmartFeedLoading] = useState(false);
+  const [networkType, setNetworkType] = useState<string>('unknown');
+  const [networkSpeed, setNetworkSpeed] = useState<string>('unknown');
+
+  useEffect(() => {
+    const updateNetworkInfo = () => {
+      const conn = (navigator as any).connection;
+      if (conn) {
+        setNetworkType(conn.effectiveType || 'unknown');
+        setNetworkSpeed(conn.downlink ? `${conn.downlink} Mbps` : 'unknown');
+      }
+    };
+
+    updateNetworkInfo();
+    const conn = (navigator as any).connection;
+    if (conn) {
+      conn.addEventListener('change', updateNetworkInfo);
+      return () => conn.removeEventListener('change', updateNetworkInfo);
+    }
+  }, []);
 
   const toggleSection = (section: string) => {
     setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -561,7 +580,10 @@ export default function WalkieTalkie() {
         <div className="p-6 flex justify-between items-center border-b border-[#2A2B2F]">
           <div className="flex items-center gap-2">
             <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`} />
-            <span className="text-[#8E9299] text-[10px] uppercase tracking-widest">Gateway Link</span>
+            <div className="flex flex-col">
+              <span className="text-[#8E9299] text-[8px] uppercase tracking-widest leading-none">Gateway Link</span>
+              <span className="text-green-500 text-[6px] font-bold uppercase mt-0.5">{networkType} / {networkSpeed}</span>
+            </div>
             <div className="ml-2 px-2 py-0.5 bg-[#2A2B2F] rounded text-[8px] text-green-500 font-bold border border-green-500/20">
               {userCount} OPS ONLINE
             </div>
@@ -1333,6 +1355,25 @@ export default function WalkieTalkie() {
                     onToggle={() => toggleSection('netSelector')}
                     icon={<Globe className="w-3 h-3" />}
                   >
+                    <div className="mb-4 p-3 bg-[#1A1B1E] rounded-xl border border-[#2A2B2F]">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-[#8E9299] text-[8px] uppercase font-bold">Network Status</span>
+                        <div className="flex items-center gap-1">
+                          <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                          <span className="text-green-500 text-[8px] font-bold uppercase">Online</span>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="flex flex-col">
+                          <span className="text-[#8E9299] text-[7px] uppercase">Type</span>
+                          <span className="text-white text-[9px] font-bold uppercase">{networkType}</span>
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[#8E9299] text-[7px] uppercase">Speed</span>
+                          <span className="text-white text-[9px] font-bold uppercase">{networkSpeed}</span>
+                        </div>
+                      </div>
+                    </div>
                     <div className="grid grid-cols-1 gap-2">
                       {AVAILABLE_CHANNELS.map((ch) => (
                         <button
